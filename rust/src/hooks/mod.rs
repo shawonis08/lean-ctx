@@ -884,10 +884,8 @@ mod tests {
         assert!(script.contains(r"git\ *"), "script missing git pattern");
         assert!(script.contains(r"cargo\ *"), "script missing cargo pattern");
         assert!(script.contains(r"npm\ *"), "script missing npm pattern");
-        assert!(
-            !script.contains(r"rg\ *"),
-            "script should not contain rg pattern"
-        );
+        assert!(script.contains(r"rg\ *"), "script missing rg pattern");
+        assert!(script.contains(r"ls\ *"), "script missing ls pattern");
         assert!(
             script.contains("LEAN_CTX_BIN=\"/usr/bin/lean-ctx\""),
             "script missing binary path"
@@ -903,10 +901,7 @@ mod tests {
         let script = generate_compact_rewrite_script("/usr/bin/lean-ctx");
         assert!(script.contains(r"git\ *"), "compact script missing git");
         assert!(script.contains(r"cargo\ *"), "compact script missing cargo");
-        assert!(
-            !script.contains(r"rg\ *"),
-            "compact script should not contain rg"
-        );
+        assert!(script.contains(r"rg\ *"), "compact script missing rg");
     }
 
     #[test]
@@ -914,12 +909,7 @@ mod tests {
         let script = generate_rewrite_script("lean-ctx");
         let compact = generate_compact_rewrite_script("lean-ctx");
         for entry in crate::rewrite_registry::REWRITE_COMMANDS {
-            if matches!(
-                entry.category,
-                crate::rewrite_registry::Category::Search
-                    | crate::rewrite_registry::Category::FileRead
-                    | crate::rewrite_registry::Category::DirList
-            ) {
+            if matches!(entry.category, crate::rewrite_registry::Category::FileRead) {
                 continue;
             }
             let pattern = if entry.command.contains('-') {

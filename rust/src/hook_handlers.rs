@@ -171,6 +171,14 @@ fn rewrite_candidate(cmd: &str, binary: &str) -> Option<String> {
         return Some(rewritten);
     }
 
+    if let Some(rewritten) = rewrite_search_command(cmd, binary) {
+        return Some(rewritten);
+    }
+
+    if let Some(rewritten) = rewrite_dir_list_command(cmd, binary) {
+        return Some(rewritten);
+    }
+
     if let Some(rewritten) = build_rewrite_compound(cmd, binary) {
         return Some(rewritten);
     }
@@ -212,6 +220,47 @@ fn rewrite_file_read_command(cmd: &str, binary: &str) -> Option<String> {
             let lines = n.unwrap_or(10);
             Some(format!("{binary} read {path} -m lines:-{lines}"))
         }
+        _ => None,
+    }
+}
+
+/// Rewrites `rg <pattern> [path]` to `lean-ctx grep <pattern> [path]` for simple forms.
+///
+/// Falls back to `lean-ctx -c 'rg ...'` for flags/complex quoting (handled elsewhere).
+fn rewrite_search_command(cmd: &str, binary: &str) -> Option<String> {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.first().copied() != Some("rg") {
+        return None;
+    }
+    if parts.len() < 2 {
+        return None;
+    }
+    if parts[1].starts_with('-') {
+        return None;
+    }
+    if parts.len() > 3 {
+        return None;
+    }
+    let pattern = parts[1];
+    let path = parts.get(2).copied();
+    match path {
+        Some(p) if p.starts_with('-') => None,
+        Some(p) => Some(format!("{binary} grep {pattern} {p}")),
+        None => Some(format!("{binary} grep {pattern}")),
+    }
+}
+
+/// Rewrites simple `ls [path]` to `lean-ctx ls [path]`.
+///
+/// Falls back to `lean-ctx -c 'ls ...'` for flags (handled elsewhere).
+fn rewrite_dir_list_command(cmd: &str, binary: &str) -> Option<String> {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.first().copied() != Some("ls") {
+        return None;
+    }
+    match parts.len() {
+        1 => Some(format!("{binary} ls")),
+        2 if !parts[1].starts_with('-') => Some(format!("{binary} ls {}", parts[1])),
         _ => None,
     }
 }
