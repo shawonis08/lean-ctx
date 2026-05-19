@@ -41,6 +41,8 @@ pub struct ContextLedger {
     pub entries: Vec<LedgerEntry>,
     pub total_tokens_sent: usize,
     pub total_tokens_saved: usize,
+    #[serde(skip)]
+    last_flush: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +93,7 @@ impl ContextLedger {
             entries: Vec::new(),
             total_tokens_sent: 0,
             total_tokens_saved: 0,
+            last_flush: None,
         }
     }
 
@@ -100,6 +103,7 @@ impl ContextLedger {
             entries: Vec::new(),
             total_tokens_sent: 0,
             total_tokens_saved: 0,
+            last_flush: None,
         }
     }
 
@@ -376,6 +380,19 @@ impl ContextLedger {
 
     pub fn save(&self) {
         self.save_for_agent("default");
+    }
+
+    /// Debounced save: only flushes to disk if >=3s since last save.
+    /// Reduces I/O overhead during burst sequences of tool calls.
+    pub fn save_debounced(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_flush {
+            if now.duration_since(last) < std::time::Duration::from_secs(3) {
+                return;
+            }
+        }
+        self.save();
+        self.last_flush = Some(now);
     }
 
     pub fn save_for_agent(&self, agent_id: &str) {

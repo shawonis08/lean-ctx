@@ -60,7 +60,7 @@ pub fn handle(
 
     let mut files: Vec<PathBuf> = Vec::new();
     let mut matches = Vec::new();
-    let mut raw_result_lines = Vec::new();
+    let mut raw_tokens_accum: usize = 0;
     let mut files_searched = 0u32;
     let mut files_skipped_size = 0u32;
     let mut files_skipped_encoding = 0u32;
@@ -104,10 +104,14 @@ pub fn handle(
     }
 
     // Deterministic search: stable file ordering makes max_results truncation reproducible.
-    files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    files.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
 
-    for path in files {
-        let Ok(content) = std::fs::read_to_string(&path) else {
+    for path in &files {
+        if matches.len() >= max_results {
+            break;
+        }
+
+        let Ok(content) = std::fs::read_to_string(path) else {
             files_skipped_encoding += 1;
             continue;
         };
@@ -117,8 +121,8 @@ pub fn handle(
         for (i, line) in content.lines().enumerate() {
             if re.is_match(line) {
                 let short_path = protocol::shorten_path(&path.to_string_lossy());
-                let full_path = path.to_string_lossy();
-                raw_result_lines.push(format!("{full_path}:{}: {}", i + 1, line.trim()));
+                // Count raw tokens incrementally (avoids separate Vec + join)
+                raw_tokens_accum += count_tokens(line.trim()) + 2;
                 let shown = if redact {
                     crate::core::redaction::redact_text(line.trim())
                 } else {
@@ -129,10 +133,6 @@ pub fn handle(
                     break;
                 }
             }
-        }
-
-        if matches.len() >= max_results {
-            break;
         }
     }
 
@@ -218,15 +218,13 @@ pub fn handle(
         result.push_str(&hint);
     }
 
-    let raw_output = raw_result_lines.join("\n");
-    let raw_tokens = count_tokens(&raw_output);
     let sent = count_tokens(&result);
 
     // The "original" cost is what a native grep with context lines would produce.
     // rg defaults to showing full paths + 2 context lines per match. We estimate
     // the native cost as ~3x the raw match output (context + separators + headers).
-    let native_estimate = (raw_tokens as f64 * 2.5).ceil() as usize;
-    let original = native_estimate.max(raw_tokens);
+    let native_estimate = (raw_tokens_accum as f64 * 2.5).ceil() as usize;
+    let original = native_estimate.max(raw_tokens_accum);
     let savings = protocol::format_savings(original, sent);
 
     (format!("{result}\n{savings}"), original)

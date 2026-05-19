@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use super::bm25_index::{BM25Index, ChunkKind, SearchResult};
 
 #[cfg(feature = "embeddings")]
-use super::embeddings::{cosine_similarity, EmbeddingEngine};
+use super::embeddings::EmbeddingEngine;
 
 const RRF_K: f64 = 60.0;
 
@@ -190,6 +190,7 @@ pub fn hybrid_search(query: &str, index: &BM25Index, top_k: usize) -> Vec<Hybrid
 }
 
 /// Dense vector search over pre-computed chunk embeddings.
+/// Uses O(n log k) binary-heap top-k selection for small indices, HNSW for large ones.
 #[cfg(feature = "embeddings")]
 fn dense_search(
     query: &str,
@@ -202,14 +203,8 @@ fn dense_search(
         return Vec::new();
     };
 
-    let mut scored: Vec<(usize, f32)> = embeddings
-        .iter()
-        .enumerate()
-        .map(|(i, emb)| (i, cosine_similarity(&query_embedding, emb)))
-        .collect();
-
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(top_k);
+    // Use efficient O(n log k) top-k selection instead of O(n log n) full sort
+    let scored = super::hnsw::brute_force_topk(embeddings, &query_embedding, top_k);
 
     scored
         .into_iter()

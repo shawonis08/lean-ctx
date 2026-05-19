@@ -90,6 +90,10 @@ impl McpTool for CtxSearchTool {
             }
         };
 
+        if result.starts_with("ERROR:") {
+            return Err(ErrorData::invalid_params(result, None));
+        }
+
         let sent = crate::core::tokens::count_tokens(&result);
         let saved = original.saturating_sub(sent);
 

@@ -182,109 +182,152 @@ impl CtxReadTool {
             }
         }
 
-        // Acquire cache write lock with timeout guard to prevent infinite hangs.
-        // All lock acquisitions (per-file mutex, cache RwLock) use bounded waits
-        // so a zombie thread from a previous timed-out call cannot block us forever.
+        // Fast path: if both per-file lock and cache write-lock are immediately
+        // available, execute inline without spawning a thread. This avoids thread +
+        // channel overhead for the ~90% of calls that are cache hits.
         let read_timeout = std::time::Duration::from_secs(30);
         let cancelled = Arc::new(AtomicBool::new(false));
         let (output, resolved_mode, original, is_cache_hit, file_ref, cache_stats) = {
-            let cache_lock = cache_lock.clone();
-            let mode = mode.clone();
             let crp_mode = ctx.crp_mode;
-            let task_owned = current_task.clone();
-            let path_owned = path.to_string();
-            let cancel_flag = cancelled.clone();
-            let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            std::thread::spawn(move || {
-                let file_lock = per_file_lock(&path_owned);
+            let task_ref = current_task.as_deref();
 
-                // Bounded per-file lock: if a zombie thread still holds it, don't
-                // wait forever. 25s keeps us inside the 30s recv_timeout.
-                let _file_guard = {
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
-                    loop {
-                        if cancel_flag.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if let Ok(guard) = file_lock.try_lock() {
-                            break guard;
-                        }
-                        if std::time::Instant::now() >= deadline {
-                            tracing::error!(
-                                "ctx_read: per-file lock timeout after 25s for {path_owned}"
-                            );
-                            return;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
+            let fast_result = 'fast: {
+                let file_lock = per_file_lock(path);
+                let Some(_file_guard) = file_lock.try_lock().ok() else {
+                    break 'fast None;
                 };
-
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return;
-                }
-
-                // Bounded cache write-lock: avoids indefinite block when a zombie
-                // thread from a previous timed-out call still holds the lock.
-                let mut cache = {
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
-                    loop {
-                        if cancel_flag.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if let Ok(guard) = cache_lock.try_write() {
-                            break guard;
-                        }
-                        if std::time::Instant::now() >= deadline {
-                            tracing::error!(
-                                "ctx_read: cache write-lock timeout after 25s for {path_owned}"
-                            );
-                            return;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
+                let Some(mut cache) = cache_lock.try_write().ok() else {
+                    break 'fast None;
                 };
-
-                let task_ref = task_owned.as_deref();
                 let read_output = if fresh {
                     crate::tools::ctx_read::handle_fresh_with_task_resolved(
-                        &mut cache,
-                        &path_owned,
-                        &mode,
-                        crp_mode,
-                        task_ref,
+                        &mut cache, path, &mode, crp_mode, task_ref,
                     )
                 } else {
                     crate::tools::ctx_read::handle_with_task_resolved(
-                        &mut cache,
-                        &path_owned,
-                        &mode,
-                        crp_mode,
-                        task_ref,
+                        &mut cache, path, &mode, crp_mode, task_ref,
                     )
                 };
                 let content = read_output.content;
                 let rmode = read_output.resolved_mode;
-                let orig = cache.get(&path_owned).map_or(0, |e| e.original_tokens);
-                let hit = content.contains(" cached ");
-                let fref = cache.file_ref_map().get(path_owned.as_str()).cloned();
+                let orig = cache.get(path).map_or(0, |e| e.original_tokens);
+                let hit = content.contains(" cached ")
+                    || content.contains("[unchanged")
+                    || content.contains("[delta:");
+                let fref = cache.file_ref_map().get(path).cloned();
                 let stats = cache.get_stats();
                 let stats_snapshot = (stats.total_reads, stats.cache_hits);
-                let _ = tx.send((content, rmode, orig, hit, fref, stats_snapshot));
-            });
-            if let Ok(result) = rx.recv_timeout(read_timeout) {
+                Some((content, rmode, orig, hit, fref, stats_snapshot))
+            };
+
+            if let Some(result) = fast_result {
                 result
             } else {
-                cancelled.store(true, Ordering::Relaxed);
-                tracing::error!("ctx_read timed out after {read_timeout:?} for {path}");
-                let msg = format!(
-                    "ERROR: ctx_read timed out after {}s reading {path}. \
+                // Slow path: spawn thread with bounded timeout for contended locks.
+                let cache_lock = cache_lock.clone();
+                let mode = mode.clone();
+                let task_owned = current_task.clone();
+                let path_owned = path.to_string();
+                let cancel_flag = cancelled.clone();
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let file_lock = per_file_lock(&path_owned);
+
+                    // Bounded per-file lock: if a zombie thread still holds it, don't
+                    // wait forever. 25s keeps us inside the 30s recv_timeout.
+                    let _file_guard = {
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(25);
+                        loop {
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            if let Ok(guard) = file_lock.try_lock() {
+                                break guard;
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                tracing::error!(
+                                    "ctx_read: per-file lock timeout after 25s for {path_owned}"
+                                );
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    };
+
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    // Bounded cache write-lock: avoids indefinite block when a zombie
+                    // thread from a previous timed-out call still holds the lock.
+                    let mut cache = {
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(25);
+                        loop {
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            if let Ok(guard) = cache_lock.try_write() {
+                                break guard;
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                tracing::error!(
+                                    "ctx_read: cache write-lock timeout after 25s for {path_owned}"
+                                );
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    };
+
+                    let task_ref = task_owned.as_deref();
+                    let read_output = if fresh {
+                        crate::tools::ctx_read::handle_fresh_with_task_resolved(
+                            &mut cache,
+                            &path_owned,
+                            &mode,
+                            crp_mode,
+                            task_ref,
+                        )
+                    } else {
+                        crate::tools::ctx_read::handle_with_task_resolved(
+                            &mut cache,
+                            &path_owned,
+                            &mode,
+                            crp_mode,
+                            task_ref,
+                        )
+                    };
+                    let content = read_output.content;
+                    let rmode = read_output.resolved_mode;
+                    let orig = cache.get(&path_owned).map_or(0, |e| e.original_tokens);
+                    let hit = content.contains(" cached ");
+                    let fref = cache.file_ref_map().get(path_owned.as_str()).cloned();
+                    let stats = cache.get_stats();
+                    let stats_snapshot = (stats.total_reads, stats.cache_hits);
+                    let _ = tx.send((content, rmode, orig, hit, fref, stats_snapshot));
+                });
+                if let Ok(result) = rx.recv_timeout(read_timeout) {
+                    result
+                } else {
+                    cancelled.store(true, Ordering::Relaxed);
+                    tracing::error!("ctx_read timed out after {read_timeout:?} for {path}");
+                    let msg = format!(
+                        "ERROR: ctx_read timed out after {}s reading {path}. \
                      The file may be very large or a blocking I/O issue occurred. \
                      Try mode=\"lines:1-100\" for a partial read.",
-                    read_timeout.as_secs()
-                );
-                return Err(ErrorData::internal_error(msg, None));
-            }
+                        read_timeout.as_secs()
+                    );
+                    return Err(ErrorData::internal_error(msg, None));
+                }
+            } // end else (slow path)
         };
+
+        // Convert error results to proper MCP ErrorData instead of success body
+        if resolved_mode == "error" {
+            return Err(ErrorData::invalid_params(output, None));
+        }
 
         let output_tokens = crate::core::tokens::count_tokens(&output);
         let saved = original.saturating_sub(output_tokens);

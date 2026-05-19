@@ -76,7 +76,8 @@ impl ProxyStats {
 }
 
 pub async fn start_proxy(port: u16) -> anyhow::Result<()> {
-    start_proxy_with_token(port, std::env::var("LEAN_CTX_PROXY_TOKEN").ok()).await
+    let token = crate::core::session_token::resolve_proxy_token("LEAN_CTX_PROXY_TOKEN");
+    start_proxy_with_token(port, Some(token)).await
 }
 
 pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> anyhow::Result<()> {
@@ -251,9 +252,8 @@ async fn host_guard(
         if matches!(h, "127.0.0.1" | "localhost" | "[::1]") {
             return Ok(next.run(req).await);
         }
-    } else {
-        return Ok(next.run(req).await);
     }
+    // Missing or non-loopback host header → reject (DNS rebinding protection)
     Err(StatusCode::FORBIDDEN)
 }
 

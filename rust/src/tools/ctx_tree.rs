@@ -8,12 +8,30 @@ use crate::core::tokens::count_tokens;
 /// Generates a compact directory tree listing with file counts, respecting gitignore.
 pub fn handle(path: &str, depth: usize, show_hidden: bool) -> (String, usize) {
     let root = Path::new(path);
+    if root.is_file() {
+        let parent = root
+            .parent()
+            .map_or(path.to_string(), |p| p.display().to_string());
+        return (
+            format!(
+                "ERROR: '{path}' is a file, not a directory. Use path=\"{parent}\" for the containing directory."
+            ),
+            0,
+        );
+    }
     if !root.is_dir() {
-        return (format!("ERROR: {path} is not a directory"), 0);
+        return (
+            format!("ERROR: {path} does not exist or is not a directory"),
+            0,
+        );
     }
 
     let raw_output = generate_raw_tree(root, depth, show_hidden);
     let compact_output = generate_compact_tree(root, depth, show_hidden);
+
+    if compact_output.trim().is_empty() {
+        return (format!("{path}/ (empty directory, depth={depth})"), 0);
+    }
 
     let raw_tokens = count_tokens(&raw_output);
     let compact_tokens = count_tokens(&compact_output);

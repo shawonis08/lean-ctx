@@ -37,6 +37,13 @@ pub(crate) fn compress_if_beneficial(command: &str, output: &str) -> String {
         return String::new();
     }
 
+    // CRITICAL: Never compress error output from build/check/lint tools.
+    // Compiler errors, type errors, lint findings etc. must be preserved verbatim
+    // so the agent can see file paths, line numbers, and full diagnostics.
+    if is_error_output_from_build_tool(command, output) {
+        return truncate_verbatim(output, count_tokens(output));
+    }
+
     if !is_search_output(command) && crate::tools::ctx_shell::contains_auth_flow(output) {
         return output.to_string();
     }
@@ -139,6 +146,95 @@ pub(crate) fn compress_if_beneficial(command: &str, output: &str) -> String {
     }
 
     output.to_string()
+}
+
+/// Detects whether the output contains error diagnostics from a build/check/lint tool.
+/// When true, compression is bypassed to preserve file paths, line numbers, and messages.
+fn is_error_output_from_build_tool(command: &str, output: &str) -> bool {
+    let cmd = command.trim().to_ascii_lowercase();
+
+    let is_build_tool = cmd.starts_with("cargo check")
+        || cmd.starts_with("cargo build")
+        || cmd.starts_with("cargo clippy")
+        || cmd.starts_with("cargo test")
+        || cmd.starts_with("cargo fmt")
+        || cmd.starts_with("cargo run")
+        || cmd.starts_with("rustc ")
+        || cmd.starts_with("gcc ")
+        || cmd.starts_with("g++ ")
+        || cmd.starts_with("clang ")
+        || cmd.starts_with("clang++ ")
+        || cmd.starts_with("make ")
+        || cmd.starts_with("cmake ")
+        || cmd.starts_with("go build")
+        || cmd.starts_with("go vet")
+        || cmd.starts_with("go test")
+        || cmd.starts_with("golangci-lint")
+        || cmd.starts_with("tsc ")
+        || cmd.starts_with("tsc\t")
+        || cmd == "tsc"
+        || cmd.starts_with("npx tsc")
+        || cmd.starts_with("eslint")
+        || cmd.starts_with("npx eslint")
+        || cmd.starts_with("biome ")
+        || cmd.starts_with("prettier ")
+        || cmd.starts_with("mypy ")
+        || cmd.starts_with("pyright ")
+        || cmd.starts_with("pylint ")
+        || cmd.starts_with("ruff check")
+        || cmd.starts_with("flake8")
+        || cmd.starts_with("black --check")
+        || cmd.starts_with("swift build")
+        || cmd.starts_with("swiftc ")
+        || cmd.starts_with("xcodebuild ")
+        || cmd.starts_with("javac ")
+        || cmd.starts_with("gradle ")
+        || cmd.starts_with("./gradlew ")
+        || cmd.starts_with("mvn ")
+        || cmd.starts_with("./mvnw ")
+        || cmd.starts_with("dotnet build")
+        || cmd.starts_with("dotnet test")
+        || cmd.starts_with("msbuild")
+        || cmd.starts_with("zig build")
+        || cmd.starts_with("nim c ")
+        || cmd.starts_with("ghc ")
+        || cmd.starts_with("stack build")
+        || cmd.starts_with("cabal build")
+        || cmd.starts_with("mix compile")
+        || cmd.starts_with("mix test")
+        || cmd.starts_with("mix credo")
+        || cmd.starts_with("shellcheck ")
+        || cmd.starts_with("hadolint ")
+        || cmd.starts_with("terraform validate")
+        || cmd.starts_with("terraform plan")
+        || cmd.starts_with("ansible-lint")
+        || cmd.starts_with("rubocop ")
+        || cmd.starts_with("solhint ")
+        || cmd.starts_with("slither ");
+
+    if !is_build_tool {
+        return false;
+    }
+
+    // Check if the output actually contains error indicators
+    output.contains("error[")
+        || output.contains("error:")
+        || output.contains("Error:")
+        || output.contains("ERROR:")
+        || output.contains(" error ")
+        || output.contains("warning[")
+        || output.contains("warning:")
+        || output.contains("failed")
+        || output.contains("FAILED")
+        || output.contains("panicked at")
+        || output.contains("cannot find")
+        || output.contains("not found")
+        || output.contains("undefined")
+        || output.contains("unresolved")
+        || output.contains("expected ")
+        || output.contains("mismatched types")
+        || output.contains("aborting due to")
+        || output.contains("could not compile")
 }
 
 const MAX_VERBATIM_TOKENS: usize = 8000;

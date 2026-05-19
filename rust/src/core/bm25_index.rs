@@ -340,7 +340,11 @@ impl BM25Index {
             return Vec::new();
         }
 
-        let mut scores: HashMap<usize, f64> = HashMap::new();
+        // Pre-allocated score array: O(1) per-access vs HashMap overhead.
+        // Kolmogorov-optimal: minimal allocation for the scoring operation.
+        let n = self.chunks.len();
+        let mut scores = vec![0.0f64; n];
+        let mut touched = Vec::with_capacity(n.min(256));
 
         for token in &query_tokens {
             let lower = token.to_lowercase();
@@ -352,30 +356,29 @@ impl BM25Index {
             let idf = ((self.doc_count as f64 - df + 0.5) / (df + 0.5) + 1.0).ln();
 
             if let Some(postings) = self.inverted.get(&lower) {
-                let mut doc_tfs: HashMap<usize, f64> = HashMap::new();
-                for (idx, weight) in postings {
-                    *doc_tfs.entry(*idx).or_insert(0.0) += weight;
-                }
-
-                for (doc_idx, tf) in &doc_tfs {
-                    let doc_len = self.chunks[*doc_idx].token_count as f64;
+                for &(idx, weight) in postings {
+                    let doc_len = self.chunks[idx].token_count as f64;
                     let norm_len = doc_len / self.avg_doc_len.max(1.0);
-                    let bm25 = idf * (tf * (BM25_K1 + 1.0))
-                        / (tf + BM25_K1 * (1.0 - BM25_B + BM25_B * norm_len));
+                    let bm25 = idf * (weight * (BM25_K1 + 1.0))
+                        / (weight + BM25_K1 * (1.0 - BM25_B + BM25_B * norm_len));
 
-                    *scores.entry(*doc_idx).or_insert(0.0) += bm25;
+                    if scores[idx] == 0.0 {
+                        touched.push(idx);
+                    }
+                    scores[idx] += bm25;
                 }
             }
         }
 
-        let mut results: Vec<SearchResult> = scores
-            .into_iter()
-            .map(|(idx, score)| {
+        let mut results: Vec<SearchResult> = touched
+            .iter()
+            .filter(|&&idx| scores[idx] > 0.0)
+            .map(|&idx| {
                 let chunk = &self.chunks[idx];
                 let snippet = chunk.content.lines().take(5).collect::<Vec<_>>().join("\n");
                 SearchResult {
                     chunk_idx: idx,
-                    score,
+                    score: scores[idx],
                     file_path: chunk.file_path.clone(),
                     symbol_name: chunk.symbol_name.clone(),
                     kind: chunk.kind.clone(),

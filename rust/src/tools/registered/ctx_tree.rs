@@ -43,6 +43,11 @@ impl McpTool for CtxTreeTool {
         let show_hidden = get_bool(args, "show_hidden").unwrap_or(false);
 
         let (result, original) = crate::tools::ctx_tree::handle(&path, depth, show_hidden);
+
+        if result.starts_with("ERROR:") {
+            return Err(ErrorData::invalid_params(result, None));
+        }
+
         let sent = crate::core::tokens::count_tokens(&result);
         let saved = original.saturating_sub(sent);
 

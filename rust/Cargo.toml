@@ -243,6 +243,7 @@ tikv-jemalloc-ctl = { version = "0.6", optional = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
+serial_test = "3.4.0"
 tempfile = "3.27.0"
 tower = "0.5"
 
