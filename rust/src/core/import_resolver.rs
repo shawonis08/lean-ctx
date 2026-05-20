@@ -136,7 +136,7 @@ fn resolve_ts(imp: &ImportInfo, file_path: &str, ctx: &ResolverContext) -> (Opti
 
 /// Resolve a TS/JS import path, handling the TypeScript convention where
 /// `.js` specifiers in `.ts` files resolve to `.ts` sources.
-/// See: https://www.typescriptlang.org/docs/handbook/modules/reference.html#relative-file-path-resolution
+/// See: <https://www.typescriptlang.org/docs/handbook/modules/reference.html#relative-file-path-resolution>
 fn try_ts_with_js_remap(base: &str, ctx: &ResolverContext) -> Option<String> {
     const JS_TO_TS: &[(&str, &[&str])] = &[
         (".js", &[".ts", ".tsx"]),

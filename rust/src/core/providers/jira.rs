@@ -1,7 +1,7 @@
 //! Jira provider — issues, sprints, and boards via the Jira REST API.
 //!
 //! Configuration via environment variables:
-//!   - `JIRA_URL`: Base URL (e.g., "https://company.atlassian.net")
+//!   - `JIRA_URL`: Base URL (e.g., `https://company.atlassian.net`)
 //!   - `JIRA_EMAIL`: User email for Basic Auth
 //!   - `JIRA_TOKEN`: API token
 //!   - `JIRA_PROJECT`: Default project key (e.g., "PROJ")
