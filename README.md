@@ -127,7 +127,7 @@ Know exactly where your context budget goes. Control it.
 - **Context Proof** (`ctx_proof`, `ctx_verify`): cryptographic proofs with 4-layer verification engine
 
 <details>
-<summary><strong>Full feature list (61 MCP tools)</strong></summary>
+<summary><strong>Full feature list (62 MCP tools)</strong></summary>
 
 - **Graph-Powered Intelligence**: hybrid search (BM25 + embeddings + graph proximity via RRF), incremental git-diff updates
 - **LSP Refactoring** (`ctx_refactor`): language-server-powered rename, references, go-to-definition via rust-analyzer, typescript-language-server, pylsp, gopls
@@ -285,7 +285,7 @@ lean-ctx benchmark report .
 - **190+ forks** — active community contributions
 - **181 releases** — shipped daily since launch
 - **28 supported AI coding agents** — broadest MCP compatibility
-- **61 MCP tools** — from simple file reads to multi-agent orchestration
+- **62 MCP tools** — from simple file reads to multi-agent orchestration
 - Used in production by teams running Claude Code, Cursor, and Codex daily
 
 ## Docs

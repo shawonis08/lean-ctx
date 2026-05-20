@@ -1,6 +1,6 @@
 # lean-ctx
 
-**Context Runtime for AI Agents with CCP + TDD. Shell Hook + MCP Server. 61 MCP tools, 10 read modes, 60+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 18 languages. Single Rust binary.**
+**Context Runtime for AI Agents with CCP + TDD. Shell Hook + MCP Server. 62 MCP tools, 10 read modes, 60+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 18 languages. Single Rust binary.**
 
 [![CI](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml)
 [![Security Check](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml)
@@ -361,7 +361,7 @@ $ lean-ctx gain
   lean-ctx v3.6.10  |  leanctx.com  |  lean-ctx dashboard
 ```
 
-## 61+ MCP Tools
+## 62+ MCP Tools
 
 When configured as an MCP server, lean-ctx provides 61 tools that replace or augment your editor's built-in tools:
 
