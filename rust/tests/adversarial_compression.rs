@@ -691,12 +691,25 @@ web-deploy-def456-uvw         0/1     CrashLoopBackOff   15 (2m ago)   1h
 worker-deploy-ghi789-rst      1/1     Running            0             3d
 db-migrate-job-abc            0/1     Error              0             30m";
 
-    // kubectl get pods is Verbatim via OutputPolicy (is_container_listing),
-    // so output is preserved in full.
-    assert!(
-        compress_output("kubectl get pods", output).is_none(),
-        "kubectl get pods must be Verbatim (no compression)"
-    );
+    // kubectl get pods is Compressible (not Verbatim), but the kubectl
+    // pattern engine must preserve all critical status information.
+    match compress_output("kubectl get pods", output) {
+        None => {} // Verbatim passthrough is also fine
+        Some(compressed) => {
+            assert!(
+                compressed.contains("CrashLoopBackOff"),
+                "must preserve CrashLoopBackOff status: {compressed}"
+            );
+            assert!(
+                compressed.contains("Error"),
+                "must preserve Error status: {compressed}"
+            );
+            assert!(
+                compressed.contains("web-deploy") || compressed.contains("def456"),
+                "must preserve failing pod identifier: {compressed}"
+            );
+        }
+    }
 }
 
 #[test]
