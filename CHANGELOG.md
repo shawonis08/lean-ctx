@@ -3,6 +3,36 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.6.24] — 2026-05-30
+
+### Added
+- **Knowledge Intelligence — Revision Tracking**: `KnowledgeFact` gains a `revision_count` field. Confirmations increment it, supersedes carry it forward. Output distinguishes "Remembered (revision 1)" vs "Confirmed (revision N, confirmed Nx)" vs "Updated → revision N (previous archived)". Recall shows `rev N` for multi-revision facts. Backward-compatible via `#[serde(default)]`.
+- **Knowledge Intelligence — Cross-Key Conflict-Surfacing**: `find_cross_key_similar()` detects semantically similar facts across different keys using Jaccard similarity (threshold > 0.35). When `remember` stores a fact, similar facts from other keys are surfaced in a `SIMILAR FACTS` section with similarity percentages. New `judge` action lets agents resolve pairs as `supersedes`/`compatible`/`unrelated`. `JudgedPair` storage suppresses future noise for already-judged pairs. Recall output annotates facts with `↳ supersedes`/`↳ compatible` relationship arrows.
+- **Knowledge Intelligence — Activity-weighted Documentation Nudges**: Replaces the fixed 30-call counter with weighted activity scoring. Edits +4, shell test/build +3, shell +2, new file read +1, cache-hit +0, knowledge/session calls reset to 0. Triggers only when `weighted_score >= 20` AND `significant_tools >= 5` AND no documentation in 8 minutes. Contextual nudge text based on dominant tool type (shell-heavy, edit-heavy, or generic). Fallback 30-call counter preserved as safety net.
+- **`bunx` in default shell allowlist** (#310).
+
+### Fixed
+- **RAM Guardian measures daemon RSS instead of CLI process** (#317): `lean-ctx doctor` was showing the CLI's ~14 MB instead of the daemon's actual memory. Added `get_rss_bytes_for_pid(pid)` for Linux (`/proc/{pid}/status`) and macOS (`ps -o rss= -p {pid}`). Doctor now reads the daemon PID and reports its real RSS with `(daemon)` label.
+- **Orphan MCP processes no longer accumulate RAM** (#317): Added parent-process watchdog (checks every 5s if parent PID changed, exits cleanly when IDE closes) and startup orphan cleanup (kills `lean-ctx` processes reparented to PID 1). Prevents MCP server processes from surviving after IDE restarts.
+- **`lean-ctx restart` no longer kills active MCP servers** (#317): `find_killable_pids()` excludes MCP server processes from force-kill during restart, preventing a kill loop where the IDE immediately respawns them.
+- **Jira Cloud 410 Gone error** (#315): Migrated from deprecated `GET /rest/api/3/search` to `POST /rest/api/3/search/jql` with `nextPageToken` pagination. Server/Data Center deployments (detected via `JIRA_DEPLOYMENT=server`) continue using `GET /rest/api/2/search`.
+- **Provider discovery ignores project root** (#316): `handle_discover()` and `handle_mcp_resources()` now pass `project_root` to `init_with_project_root()` so project-local provider configs are found.
+- **Cross-source hints path normalization** (#316): `hints_for_file()` now accepts `project_root` for consistent `graph_relative_key` normalization.
+- **JSONC parser tolerates trailing commas** (#311, #312): Prevents parse failures in MCP config files with trailing commas. Also detects duplicate MCP scope registration (workspace + user) and warns.
+- **CI structural test relaxations**: Three tests (`scenario_shell_compression_with_saved_tokens_skips_terse`, `raw_shell_skips_all_postprocessing`, `ctx_handoff_create_show_list_pull_clear`) relaxed to check for component presence instead of exact multiline matches, preventing false failures from unrelated code changes.
+
+### Changed
+- **Reverted thinking-mode guard** (#313): The `is_thinking_mode_active()` defensive check in PreToolUse hooks was removed — the original Claude Code bug it worked around has been fixed upstream, and the guard could reduce token savings.
+
+### Hardening
+- **Graceful error handling**: Replaced potential panics with proper error returns and added logging for silent save failures across knowledge, session, and stats persistence.
+
+### Refactoring
+- **CLI dispatch split**: Extracted `dispatch.rs` (1800+ lines) into `analytics.rs`, `network.rs`, and other submodules.
+- **Doctor module split**: Decomposed `doctor/mod.rs` (2321 lines) into `common.rs` + `checks.rs`.
+- **Editor registry split**: Split `writers.rs` (2580 lines) into a proper module with subfiles.
+- **Server dedup**: Consolidated duplicated `has_project_marker` / `PROJECT_MARKERS` logic.
+
 ## [Unreleased]
 
 ### Added
