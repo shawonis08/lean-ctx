@@ -1,0 +1,1179 @@
+// Auto-split from the former monolithic doctor/mod.rs.
+
+#[allow(clippy::wildcard_imports)]
+use super::common::*;
+use super::{Outcome, BOLD, DIM, GREEN, RED, RST, YELLOW};
+use std::net::TcpListener;
+
+pub(super) fn shell_aliases_outcome() -> Outcome {
+    let Some(home) = dirs::home_dir() else {
+        return Outcome {
+            ok: false,
+            line: format!("{BOLD}Shell aliases{RST}  {RED}could not resolve home directory{RST}"),
+        };
+    };
+
+    let mut parts = Vec::new();
+    let mut needs_update = Vec::new();
+
+    let zsh = home.join(".zshrc");
+    if rc_contains_lean_ctx(&zsh) {
+        parts.push(format!("{DIM}~/.zshrc{RST}"));
+        if !rc_has_pipe_guard(&zsh) && is_active_shell("~/.zshrc") {
+            needs_update.push("~/.zshrc");
+        }
+    }
+    let bash = home.join(".bashrc");
+    if rc_contains_lean_ctx(&bash) {
+        parts.push(format!("{DIM}~/.bashrc{RST}"));
+        if !rc_has_pipe_guard(&bash) && is_active_shell("~/.bashrc") {
+            needs_update.push("~/.bashrc");
+        }
+    }
+
+    let fish = home.join(".config").join("fish").join("config.fish");
+    if rc_contains_lean_ctx(&fish) {
+        parts.push(format!("{DIM}~/.config/fish/config.fish{RST}"));
+        if !rc_has_pipe_guard(&fish) && is_active_shell("~/.config/fish/config.fish") {
+            needs_update.push("~/.config/fish/config.fish");
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let ps_profile = home
+            .join("Documents")
+            .join("PowerShell")
+            .join("Microsoft.PowerShell_profile.ps1");
+        let ps_profile_legacy = home
+            .join("Documents")
+            .join("WindowsPowerShell")
+            .join("Microsoft.PowerShell_profile.ps1");
+        if rc_contains_lean_ctx(&ps_profile) {
+            parts.push(format!("{DIM}PowerShell profile{RST}"));
+            if !rc_has_pipe_guard(&ps_profile) {
+                needs_update.push("PowerShell profile");
+            }
+        } else if rc_contains_lean_ctx(&ps_profile_legacy) {
+            parts.push(format!("{DIM}WindowsPowerShell profile{RST}"));
+            if !rc_has_pipe_guard(&ps_profile_legacy) {
+                needs_update.push("WindowsPowerShell profile");
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        let hint = if cfg!(windows) {
+            "no \"lean-ctx\" in PowerShell profile, ~/.zshrc or ~/.bashrc"
+        } else {
+            "no \"lean-ctx\" in ~/.zshrc, ~/.bashrc, or ~/.config/fish/config.fish"
+        };
+        Outcome {
+            ok: false,
+            line: format!("{BOLD}Shell aliases{RST}  {RED}{hint}{RST}"),
+        }
+    } else if !needs_update.is_empty() {
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}Shell aliases{RST}  {YELLOW}outdated hook in {} — run {BOLD}lean-ctx init --global{RST}{YELLOW} to fix (pipe guard missing){RST}",
+                needs_update.join(", ")
+            ),
+        }
+    } else {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Shell aliases{RST}  {GREEN}lean-ctx referenced in {}{RST}",
+                parts.join(", ")
+            ),
+        }
+    }
+}
+
+pub(super) fn mcp_config_outcome() -> Outcome {
+    let Some(home) = dirs::home_dir() else {
+        return Outcome {
+            ok: false,
+            line: format!("{BOLD}MCP config{RST}  {RED}could not resolve home directory{RST}"),
+        };
+    };
+
+    let locations = mcp_config_locations(&home);
+    let mut found: Vec<String> = Vec::new();
+    let mut exists_no_ref: Vec<String> = Vec::new();
+
+    for loc in &locations {
+        if let Ok(content) = std::fs::read_to_string(&loc.path) {
+            if has_lean_ctx_mcp_entry(&content) {
+                found.push(format!("{} {DIM}({}){RST}", loc.name, loc.display));
+            } else {
+                exists_no_ref.push(loc.name.to_string());
+            }
+        }
+    }
+
+    found.sort();
+    found.dedup();
+    exists_no_ref.sort();
+    exists_no_ref.dedup();
+
+    if !found.is_empty() {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}MCP config{RST}  {GREEN}lean-ctx found in: {}{RST}",
+                found.join(", ")
+            ),
+        }
+    } else if !exists_no_ref.is_empty() {
+        let has_claude = exists_no_ref.iter().any(|n| n.starts_with("Claude Code"));
+        let cause = if has_claude {
+            format!("{DIM}(Claude Code may overwrite ~/.claude.json on startup — lean-ctx entry missing from mcpServers){RST}")
+        } else {
+            String::new()
+        };
+        let hint = if has_claude {
+            format!("{DIM}(run: lean-ctx doctor --fix OR lean-ctx init --agent claude){RST}")
+        } else {
+            format!("{DIM}(run: lean-ctx doctor --fix OR lean-ctx setup){RST}")
+        };
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}MCP config{RST}  {YELLOW}config exists for {} but mcpServers does not contain lean-ctx{RST}  {cause} {hint}",
+                exists_no_ref.join(", "),
+            ),
+        }
+    } else {
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}MCP config{RST}  {YELLOW}no MCP config found{RST}  {DIM}(run: lean-ctx setup){RST}"
+            ),
+        }
+    }
+}
+
+pub(super) fn port_3333_outcome() -> Outcome {
+    match TcpListener::bind("127.0.0.1:3333") {
+        Ok(_listener) => Outcome {
+            ok: true,
+            line: format!("{BOLD}Dashboard port 3333{RST}  {GREEN}available on 127.0.0.1{RST}"),
+        },
+        Err(e) => Outcome {
+            ok: false,
+            line: format!("{BOLD}Dashboard port 3333{RST}  {RED}not available: {e}{RST}"),
+        },
+    }
+}
+
+pub(super) fn pi_outcome() -> Option<Outcome> {
+    let pi_result = std::process::Command::new("pi").arg("--version").output();
+
+    match pi_result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let has_plugin = std::process::Command::new("pi")
+                .args(["list"])
+                .output()
+                .is_ok_and(|o| {
+                    o.status.success() && String::from_utf8_lossy(&o.stdout).contains("pi-lean-ctx")
+                });
+
+            let has_mcp = dirs::home_dir()
+                .map(|h| h.join(".pi/agent/mcp.json"))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .is_some_and(|c| c.contains("lean-ctx"));
+
+            if has_plugin && has_mcp {
+                Some(Outcome {
+                    ok: true,
+                    line: format!(
+                        "{BOLD}Pi Coding Agent{RST}  {GREEN}{version}, pi-lean-ctx + MCP configured{RST}"
+                    ),
+                })
+            } else if has_plugin {
+                Some(Outcome {
+                    ok: true,
+                    line: format!(
+                        "{BOLD}Pi Coding Agent{RST}  {GREEN}{version}, pi-lean-ctx installed{RST}  {DIM}(MCP not configured — embedded bridge active){RST}"
+                    ),
+                })
+            } else {
+                Some(Outcome {
+                    ok: false,
+                    line: format!(
+                        "{BOLD}Pi Coding Agent{RST}  {YELLOW}{version}, but pi-lean-ctx not installed{RST}  {DIM}(run: pi install npm:pi-lean-ctx){RST}"
+                    ),
+                })
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn provider_outcome() -> Outcome {
+    let registry = crate::core::providers::global_registry();
+    let ids = registry.available_provider_ids();
+    if ids.is_empty() {
+        return Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Providers{RST}  {DIM}none configured (enable via [providers] in config.toml){RST}"
+            ),
+        };
+    }
+    let labels: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            if let Some(p) = registry.get(id) {
+                if p.is_available() {
+                    format!("{GREEN}{id}{RST}")
+                } else {
+                    format!("{YELLOW}{id}(no auth){RST}")
+                }
+            } else {
+                format!("{RED}{id}(missing){RST}")
+            }
+        })
+        .collect();
+    Outcome {
+        ok: true,
+        line: format!("{BOLD}Providers{RST}  {}", labels.join(", ")),
+    }
+}
+
+pub(super) fn mcp_bridge_outcomes() -> Vec<Outcome> {
+    let cfg = crate::core::config::Config::load();
+    let bridges = &cfg.providers.mcp_bridges;
+    if bridges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+
+    let auto_idx = if cfg.providers.auto_index {
+        format!("{GREEN}auto_index=true{RST}")
+    } else {
+        format!("{YELLOW}auto_index=false (provider data won't be indexed into BM25/Graph/Knowledge){RST}")
+    };
+    results.push(Outcome {
+        ok: cfg.providers.auto_index,
+        line: format!("{BOLD}Provider indexing{RST}  {auto_idx}"),
+    });
+
+    for (name, entry) in bridges {
+        let url = entry.url.as_deref().unwrap_or("");
+        let cmd = entry.command.as_deref().unwrap_or("");
+        let source = if !url.is_empty() {
+            format!("url={url}")
+        } else if !cmd.is_empty() {
+            format!("cmd={cmd}")
+        } else {
+            "no url/command".to_string()
+        };
+
+        let ok = !url.is_empty() || !cmd.is_empty();
+        let status = if ok {
+            format!("{GREEN}configured{RST}")
+        } else {
+            format!("{RED}missing url/command{RST}")
+        };
+
+        results.push(Outcome {
+            ok,
+            line: format!("{BOLD}MCP Bridge{RST}  mcp:{name} ({source}) [{status}]"),
+        });
+    }
+
+    results
+}
+
+pub(super) fn plan_mode_outcomes() -> Vec<Outcome> {
+    let status = crate::core::editor_registry::plan_mode::check_plan_mode_status();
+    let mut results = Vec::new();
+
+    if let Some(configured) = status.vscode_configured {
+        if configured {
+            results.push(Outcome {
+                ok: true,
+                line: format!(
+                    "{BOLD}Plan mode{RST}  VS Code  {GREEN}planAgent tools configured{RST}"
+                ),
+            });
+        } else {
+            results.push(Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}Plan mode{RST}  VS Code  {YELLOW}not configured{RST}  {DIM}(run: lean-ctx setup){RST}"
+                ),
+            });
+        }
+    }
+
+    if let Some(configured) = status.claude_configured {
+        if configured {
+            results.push(Outcome {
+                ok: true,
+                line: format!("{BOLD}Plan mode{RST}  Claude Code  {GREEN}permissions present{RST}"),
+            });
+        } else {
+            results.push(Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}Plan mode{RST}  Claude Code  {YELLOW}not configured{RST}  {DIM}(run: lean-ctx setup){RST}"
+                ),
+            });
+        }
+    }
+
+    results
+}
+
+pub(super) fn session_state_outcome() -> Outcome {
+    use crate::core::session::SessionState;
+
+    match SessionState::load_latest() {
+        Some(session) => {
+            let root = session
+                .project_root
+                .as_deref()
+                .unwrap_or("(not set)");
+            let cwd = session
+                .shell_cwd
+                .as_deref()
+                .unwrap_or("(not tracked)");
+            Outcome {
+                ok: true,
+                line: format!(
+                    "{BOLD}Session state{RST}  {GREEN}active{RST}  {DIM}root: {root}, cwd: {cwd}, v{}{RST}",
+                    session.version
+                ),
+            }
+        }
+        None => Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Session state{RST}  {YELLOW}no active session{RST}  {DIM}(will be created on first tool call){RST}"
+            ),
+        },
+    }
+}
+
+pub(super) fn docker_env_outcomes() -> Vec<Outcome> {
+    if !crate::shell::is_container() {
+        return vec![];
+    }
+    let env_sh = crate::core::data_dir::lean_ctx_data_dir().map_or_else(
+        |_| "/root/.lean-ctx/env.sh".to_string(),
+        |d| d.join("env.sh").to_string_lossy().to_string(),
+    );
+
+    let mut outcomes = vec![];
+
+    let shell_name = std::env::var("SHELL").unwrap_or_default();
+    let is_bash = shell_name.contains("bash") || shell_name.is_empty();
+
+    if is_bash {
+        let has_bash_env = std::env::var("BASH_ENV").is_ok();
+        outcomes.push(if has_bash_env {
+            Outcome {
+                ok: true,
+                line: format!(
+                    "{BOLD}BASH_ENV{RST}  {GREEN}set{RST}  {DIM}({}){RST}",
+                    std::env::var("BASH_ENV").unwrap_or_default()
+                ),
+            }
+        } else {
+            Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}BASH_ENV{RST}  {RED}not set{RST}  {YELLOW}(add to Dockerfile: ENV BASH_ENV=\"{env_sh}\"){RST}"
+                ),
+            }
+        });
+    }
+
+    let has_claude_env = std::env::var("CLAUDE_ENV_FILE").is_ok();
+    outcomes.push(if has_claude_env {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}CLAUDE_ENV_FILE{RST}  {GREEN}set{RST}  {DIM}({}){RST}",
+                std::env::var("CLAUDE_ENV_FILE").unwrap_or_default()
+            ),
+        }
+    } else {
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}CLAUDE_ENV_FILE{RST}  {RED}not set{RST}  {YELLOW}(for Claude Code: ENV CLAUDE_ENV_FILE=\"{env_sh}\"){RST}"
+            ),
+        }
+    });
+
+    outcomes
+}
+
+pub(super) fn skill_files_outcome() -> Outcome {
+    let Some(home) = dirs::home_dir() else {
+        return Outcome {
+            ok: false,
+            line: format!("{BOLD}SKILL.md{RST}  {RED}could not resolve home directory{RST}"),
+        };
+    };
+
+    let candidates = [
+        ("Claude Code", home.join(".claude/skills/lean-ctx/SKILL.md")),
+        ("Cursor", home.join(".cursor/skills/lean-ctx/SKILL.md")),
+        (
+            "Codex CLI",
+            crate::core::home::resolve_codex_dir()
+                .unwrap_or_else(|| home.join(".codex"))
+                .join("skills/lean-ctx/SKILL.md"),
+        ),
+        (
+            "GitHub Copilot",
+            home.join(".copilot/skills/lean-ctx/SKILL.md"),
+        ),
+    ];
+
+    let mut found: Vec<&str> = Vec::new();
+    for (name, path) in &candidates {
+        if path.exists() {
+            found.push(name);
+        }
+    }
+
+    if found.is_empty() {
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}SKILL.md{RST}  {YELLOW}not installed{RST}  {DIM}(run: lean-ctx setup){RST}"
+            ),
+        }
+    } else {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}SKILL.md{RST}  {GREEN}installed for {}{RST}",
+                found.join(", ")
+            ),
+        }
+    }
+}
+
+pub(super) fn proxy_health_outcome() -> Outcome {
+    use crate::core::config::Config;
+
+    let cfg = Config::load();
+    let port = crate::proxy_setup::default_port();
+
+    match cfg.proxy_enabled {
+        Some(true) => {
+            let installed = crate::proxy_autostart::is_installed();
+            let reachable = {
+                use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+                TcpStream::connect_timeout(&addr, crate::proxy_setup::proxy_timeout()).is_ok()
+            };
+
+            if installed && reachable {
+                // Verify auth works: probe /health (no auth needed) to confirm HTTP layer
+                let auth_ok = proxy_auth_probe(port);
+                if auth_ok {
+                    Outcome {
+                        ok: true,
+                        line: format!(
+                            "{BOLD}Proxy{RST}  {GREEN}enabled, running on port {port}{RST}"
+                        ),
+                    }
+                } else {
+                    Outcome {
+                        ok: false,
+                        line: format!(
+                            "{BOLD}Proxy{RST}  {YELLOW}running on port {port} but auth probe failed{RST}  {YELLOW}fix: lean-ctx proxy restart{RST}"
+                        ),
+                    }
+                }
+            } else if installed && !reachable {
+                Outcome {
+                    ok: false,
+                    line: format!(
+                        "{BOLD}Proxy{RST}  {RED}enabled but not reachable on port {port}{RST}  {YELLOW}fix: lean-ctx proxy start{RST}"
+                    ),
+                }
+            } else {
+                Outcome {
+                    ok: false,
+                    line: format!(
+                        "{BOLD}Proxy{RST}  {RED}enabled but autostart not installed{RST}  {YELLOW}fix: lean-ctx proxy enable{RST}"
+                    ),
+                }
+            }
+        }
+        Some(false) => Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Proxy{RST}  {DIM}disabled (optional feature){RST}  {DIM}enable: lean-ctx proxy enable{RST}"
+            ),
+        },
+        None => Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Proxy{RST}  {DIM}not configured{RST}  {DIM}enable: lean-ctx proxy enable{RST}"
+            ),
+        },
+    }
+}
+
+/// Detects stale `ANTHROPIC_BASE_URL` in Claude Code settings pointing to the local
+/// lean-ctx proxy when the proxy is not enabled. Returns `None` when no mismatch exists
+/// (no check needed), `Some(Outcome)` when a stale URL is found.
+pub(super) fn stale_proxy_env_outcome() -> Option<Outcome> {
+    use crate::core::config::Config;
+
+    let home = dirs::home_dir()?;
+    let cfg = Config::load();
+    let port = crate::proxy_setup::default_port();
+
+    if cfg.proxy_enabled == Some(true) {
+        return None;
+    }
+
+    let settings_dir = crate::core::editor_registry::claude_state_dir(&home);
+    let settings_path = settings_dir.join("settings.json");
+    let content = std::fs::read_to_string(&settings_path).ok()?;
+    let doc: serde_json::Value = crate::core::jsonc::parse_jsonc(&content).ok()?;
+
+    let base_url = doc
+        .get("env")
+        .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let local_proxy = format!("http://127.0.0.1:{port}");
+    let is_local = base_url == local_proxy
+        || base_url == format!("http://localhost:{port}")
+        || base_url.starts_with("http://127.0.0.1:")
+        || base_url.starts_with("http://localhost:");
+
+    if !is_local {
+        return None;
+    }
+
+    let state = if cfg.proxy_enabled == Some(false) {
+        "disabled"
+    } else {
+        "not configured"
+    };
+
+    Some(Outcome {
+        ok: false,
+        line: format!(
+            "{BOLD}Proxy env{RST}  {RED}ANTHROPIC_BASE_URL → {base_url} but proxy is {state}{RST}\n\
+             {DIM}         Claude Code routes API traffic to lean-ctx, but lean-ctx proxy is {state}.{RST}\n\
+             {DIM}         This causes 401 auth failures. Fix:{RST}\n\
+             {YELLOW}           lean-ctx proxy cleanup    {DIM}(remove stale URL){RST}\n\
+             {YELLOW}           lean-ctx proxy enable     {DIM}(enable the proxy){RST}"
+        ),
+    })
+}
+
+pub(super) fn proxy_upstream_outcome() -> Outcome {
+    use crate::core::config::{is_local_proxy_url, Config, ProxyProvider};
+
+    let cfg = Config::load();
+    let checks = [
+        (
+            "Anthropic",
+            "proxy.anthropic_upstream",
+            cfg.proxy.resolve_upstream(ProxyProvider::Anthropic),
+        ),
+        (
+            "OpenAI",
+            "proxy.openai_upstream",
+            cfg.proxy.resolve_upstream(ProxyProvider::OpenAi),
+        ),
+        (
+            "Gemini",
+            "proxy.gemini_upstream",
+            cfg.proxy.resolve_upstream(ProxyProvider::Gemini),
+        ),
+    ];
+
+    let mut custom = Vec::new();
+    for (label, key, resolved) in &checks {
+        if is_local_proxy_url(resolved) {
+            return Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}Proxy upstream{RST}  {RED}{label} upstream points back to local proxy{RST}  {YELLOW}run: lean-ctx config set {key} <url>{RST}"
+                ),
+            };
+        }
+        if !resolved.starts_with("http://") && !resolved.starts_with("https://") {
+            return Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}Proxy upstream{RST}  {RED}invalid {label} upstream{RST}  {YELLOW}set {key} to an http(s) URL{RST}"
+                ),
+            };
+        }
+        let is_default = matches!(
+            *label,
+            "Anthropic" if resolved == "https://api.anthropic.com"
+        ) || matches!(
+            *label,
+            "OpenAI" if resolved == "https://api.openai.com"
+        ) || matches!(
+            *label,
+            "Gemini" if resolved == "https://generativelanguage.googleapis.com"
+        );
+        if !is_default {
+            custom.push(format!("{label}={resolved}"));
+        }
+    }
+
+    if custom.is_empty() {
+        Outcome {
+            ok: true,
+            line: format!("{BOLD}Proxy upstream{RST}  {GREEN}provider defaults{RST}"),
+        }
+    } else {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Proxy upstream{RST}  {GREEN}custom: {}{RST}",
+                custom.join(", ")
+            ),
+        }
+    }
+}
+
+pub(super) fn cache_safety_outcome() -> Outcome {
+    use crate::core::neural::cache_alignment::CacheAlignedOutput;
+    use crate::core::provider_cache::ProviderCacheState;
+
+    let mut issues = Vec::new();
+
+    let mut aligned = CacheAlignedOutput::new();
+    aligned.add_stable_block("test", "stable content".into(), 1);
+    aligned.add_variable_block("test_var", "variable content".into(), 1);
+    let rendered = aligned.render();
+    if rendered.find("stable content").unwrap_or(usize::MAX)
+        > rendered.find("variable content").unwrap_or(0)
+    {
+        issues.push("cache_alignment: stable blocks not ordered first");
+    }
+
+    let mut state = ProviderCacheState::new();
+    let section = crate::core::provider_cache::CacheableSection::new(
+        "doctor_test",
+        "test content".into(),
+        crate::core::provider_cache::SectionPriority::System,
+        true,
+    );
+    state.mark_sent(&section);
+    if state.needs_update(&section) {
+        issues.push("provider_cache: hash tracking broken");
+    }
+
+    if issues.is_empty() {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Cache safety{RST}  {GREEN}cache_alignment + provider_cache operational{RST}"
+            ),
+        }
+    } else {
+        Outcome {
+            ok: false,
+            line: format!("{BOLD}Cache safety{RST}  {RED}{}{RST}", issues.join("; ")),
+        }
+    }
+}
+
+pub(super) fn claude_truncation_outcome() -> Option<Outcome> {
+    let home = dirs::home_dir()?;
+    let claude_detected = crate::core::editor_registry::claude_mcp_json_path(&home).exists()
+        || crate::core::editor_registry::claude_state_dir(&home).exists()
+        || claude_binary_exists();
+
+    if !claude_detected {
+        return None;
+    }
+
+    let rules_path = crate::core::editor_registry::claude_rules_dir(&home).join("lean-ctx.md");
+    let skill_path = home.join(".claude/skills/lean-ctx/SKILL.md");
+
+    let has_rules = rules_path.exists();
+    let has_skill = skill_path.exists();
+
+    if has_rules && has_skill {
+        Some(Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Claude Code instructions{RST}  {GREEN}rules + skill installed{RST}  {DIM}(MCP instructions capped at 2048 chars — full content via rules file){RST}"
+            ),
+        })
+    } else if has_rules {
+        Some(Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Claude Code instructions{RST}  {GREEN}rules file installed{RST}  {DIM}(MCP instructions capped at 2048 chars — full content via rules file){RST}"
+            ),
+        })
+    } else {
+        Some(Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}Claude Code instructions{RST}  {YELLOW}MCP instructions truncated at 2048 chars, no rules file found{RST}  {DIM}(run: lean-ctx init --agent claude){RST}"
+            ),
+        })
+    }
+}
+
+pub(super) fn bm25_cache_health_outcome() -> Outcome {
+    let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir() else {
+        return Outcome {
+            ok: true,
+            line: format!("{BOLD}BM25 cache{RST}  {DIM}skipped (no data dir){RST}"),
+        };
+    };
+
+    let vectors_dir = data_dir.join("vectors");
+    let Ok(entries) = std::fs::read_dir(&vectors_dir) else {
+        return Outcome {
+            ok: true,
+            line: format!("{BOLD}BM25 cache{RST}  {GREEN}no vector dirs{RST}"),
+        };
+    };
+
+    let cfg = crate::core::config::Config::load();
+    let profile = crate::core::config::MemoryProfile::effective(&cfg);
+    let effective_mb = if cfg.bm25_max_cache_mb == crate::core::config::default_bm25_max_cache_mb()
+    {
+        profile.bm25_max_cache_mb()
+    } else {
+        cfg.bm25_max_cache_mb
+    };
+    let max_bytes = effective_mb * 1024 * 1024;
+    let warn_bytes = max_bytes * 80 / 100; // 80% of effective limit
+    let mut total_dirs = 0u32;
+    let mut total_bytes = 0u64;
+    let mut oversized: Vec<(String, u64)> = Vec::new();
+    let mut warnings: Vec<(String, u64)> = Vec::new();
+    let mut quarantined_count = 0u32;
+
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        total_dirs += 1;
+
+        if dir.join("bm25_index.json.quarantined").exists()
+            || dir.join("bm25_index.bin.quarantined").exists()
+            || dir.join("bm25_index.bin.zst.quarantined").exists()
+        {
+            quarantined_count += 1;
+        }
+
+        let index_path = if dir.join("bm25_index.bin.zst").exists() {
+            dir.join("bm25_index.bin.zst")
+        } else if dir.join("bm25_index.bin").exists() {
+            dir.join("bm25_index.bin")
+        } else {
+            dir.join("bm25_index.json")
+        };
+        if let Ok(meta) = std::fs::metadata(&index_path) {
+            let size = meta.len();
+            total_bytes += size;
+            let display = index_path.display().to_string();
+            if size > max_bytes {
+                oversized.push((display, size));
+            } else if size > warn_bytes {
+                warnings.push((display, size));
+            }
+        }
+    }
+
+    if !oversized.is_empty() {
+        let details: Vec<String> = oversized
+            .iter()
+            .map(|(p, s)| format!("{p} ({:.1} GB)", *s as f64 / 1_073_741_824.0))
+            .collect();
+        return Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}BM25 cache{RST}  {RED}{} index(es) exceed limit ({:.0} MB){RST}: {}  {DIM}(run: lean-ctx cache prune){RST}",
+                oversized.len(),
+                max_bytes / (1024 * 1024),
+                details.join(", ")
+            ),
+        };
+    }
+
+    if !warnings.is_empty() {
+        let details: Vec<String> = warnings
+            .iter()
+            .map(|(p, s)| format!("{p} ({:.0} MB)", *s as f64 / 1_048_576.0))
+            .collect();
+        return Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}BM25 cache{RST}  {YELLOW}{} index(es) >80% of {effective_mb} MB limit{RST}: {}  {DIM}(consider extra_ignore_patterns){RST}",
+                warnings.len(),
+                details.join(", ")
+            ),
+        };
+    }
+
+    let quarantine_note = if quarantined_count > 0 {
+        format!("  {YELLOW}{quarantined_count} quarantined (run: lean-ctx cache prune){RST}")
+    } else {
+        String::new()
+    };
+
+    Outcome {
+        ok: true,
+        line: format!(
+            "{BOLD}BM25 cache{RST}  {GREEN}{total_dirs} index(es), {:.1} MB total{RST}{quarantine_note}",
+            total_bytes as f64 / 1_048_576.0
+        ),
+    }
+}
+
+pub(super) fn memory_profile_outcome() -> Outcome {
+    let cfg = crate::core::config::Config::load();
+    let profile = crate::core::config::MemoryProfile::effective(&cfg);
+    let (label, detail) = match profile {
+        crate::core::config::MemoryProfile::Low => {
+            ("low", "embeddings+semantic cache disabled, BM25 64 MB")
+        }
+        crate::core::config::MemoryProfile::Balanced => {
+            ("balanced", "default — BM25 128 MB, single embedding engine")
+        }
+        crate::core::config::MemoryProfile::Performance => {
+            ("performance", "full caches, BM25 512 MB")
+        }
+    };
+    let source = if crate::core::config::MemoryProfile::from_env().is_some() {
+        "env"
+    } else if cfg.memory_profile != crate::core::config::MemoryProfile::default() {
+        "config"
+    } else {
+        "default"
+    };
+    Outcome {
+        ok: true,
+        line: format!(
+            "{BOLD}Memory profile{RST}  {GREEN}{label}{RST}  {DIM}({source}: {detail}){RST}"
+        ),
+    }
+}
+
+pub(super) fn memory_cleanup_outcome() -> Outcome {
+    let cfg = crate::core::config::Config::load();
+    let cleanup = crate::core::config::MemoryCleanup::effective(&cfg);
+    let (label, detail) = match cleanup {
+        crate::core::config::MemoryCleanup::Aggressive => (
+            "aggressive",
+            "cache cleared after 5 min idle, single-IDE optimized",
+        ),
+        crate::core::config::MemoryCleanup::Shared => (
+            "shared",
+            "cache retained 30 min, multi-IDE/multi-model optimized",
+        ),
+    };
+    let source = if crate::core::config::MemoryCleanup::from_env().is_some() {
+        "env"
+    } else if cfg.memory_cleanup != crate::core::config::MemoryCleanup::default() {
+        "config"
+    } else {
+        "default"
+    };
+    Outcome {
+        ok: true,
+        line: format!(
+            "{BOLD}Memory cleanup{RST}  {GREEN}{label}{RST}  {DIM}({source}: {detail}){RST}"
+        ),
+    }
+}
+
+pub(super) fn ram_guardian_outcome() -> Outcome {
+    let Some(snap) = crate::core::memory_guard::MemorySnapshot::capture() else {
+        return Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}RAM Guardian{RST}  {YELLOW}not available{RST}  {DIM}(platform unsupported){RST}"
+            ),
+        };
+    };
+    let allocator = if cfg!(all(feature = "jemalloc", not(windows))) {
+        "jemalloc"
+    } else {
+        "system"
+    };
+    let ok = snap.pressure_level == crate::core::memory_guard::PressureLevel::Normal;
+    let color = if ok { GREEN } else { RED };
+    let pressure_hint = match snap.pressure_level {
+        crate::core::memory_guard::PressureLevel::Normal => String::new(),
+        level => {
+            format!(
+                "  {YELLOW}pressure={level:?} — consider: memory_profile=\"low\" or increase max_ram_percent{RST}"
+            )
+        }
+    };
+    Outcome {
+        ok,
+        line: format!(
+            "{BOLD}RAM Guardian{RST}  {color}{:.0} MB{RST} / {:.1} GB system ({:.1}%)  {DIM}limit: {:.0} MB ({allocator}){RST}{pressure_hint}",
+            snap.rss_bytes as f64 / 1_048_576.0,
+            snap.system_ram_bytes as f64 / 1_073_741_824.0,
+            snap.rss_percent,
+            snap.rss_limit_bytes as f64 / 1_048_576.0,
+        ),
+    }
+}
+
+pub(super) fn capacity_warnings() -> Vec<Outcome> {
+    let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir() else {
+        return vec![];
+    };
+
+    let cfg = crate::core::config::Config::load();
+    let policy = cfg.memory_policy_effective().unwrap_or_default();
+
+    let knowledge_dir = data_dir.join("knowledge");
+    let Ok(entries) = std::fs::read_dir(&knowledge_dir) else {
+        return vec![Outcome {
+            ok: true,
+            line: format!("{BOLD}Capacity{RST} {GREEN}no memory stores{RST}"),
+        }];
+    };
+
+    let mut results = Vec::new();
+
+    for entry in entries.flatten() {
+        let hash_dir = entry.path();
+        if !hash_dir.is_dir() {
+            continue;
+        }
+        let hash = hash_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let short_hash = &hash[..hash.len().min(8)];
+
+        let mut checks: Vec<(String, usize, usize)> = Vec::new();
+
+        if let Ok(content) = std::fs::read_to_string(hash_dir.join("knowledge.json")) {
+            if let Ok(k) =
+                serde_json::from_str::<crate::core::knowledge::ProjectKnowledge>(&content)
+            {
+                checks.push((
+                    "facts".to_string(),
+                    k.facts.len(),
+                    policy.knowledge.max_facts,
+                ));
+                checks.push((
+                    "patterns".to_string(),
+                    k.patterns.len(),
+                    policy.knowledge.max_patterns,
+                ));
+                checks.push((
+                    "history".to_string(),
+                    k.history.len(),
+                    policy.knowledge.max_history,
+                ));
+            }
+        }
+
+        if let Ok(content) = std::fs::read_to_string(hash_dir.join("embeddings.json")) {
+            if let Ok(idx) = serde_json::from_str::<
+                crate::core::knowledge_embedding::KnowledgeEmbeddingIndex,
+            >(&content)
+            {
+                checks.push((
+                    "embeddings".to_string(),
+                    idx.entries.len(),
+                    policy.embeddings.max_facts,
+                ));
+            }
+        }
+
+        if let Ok(content) = std::fs::read_to_string(hash_dir.join("gotchas.json")) {
+            if let Ok(g) =
+                serde_json::from_str::<crate::core::gotcha_tracker::GotchaStore>(&content)
+            {
+                checks.push((
+                    "gotchas".to_string(),
+                    g.gotchas.len(),
+                    policy.gotcha.max_gotchas_per_project,
+                ));
+            }
+        }
+
+        let episodes_path = data_dir
+            .join("memory")
+            .join("episodes")
+            .join(format!("{hash}.json"));
+        if let Ok(content) = std::fs::read_to_string(&episodes_path) {
+            if let Ok(e) =
+                serde_json::from_str::<crate::core::episodic_memory::EpisodicStore>(&content)
+            {
+                checks.push((
+                    "episodes".to_string(),
+                    e.episodes.len(),
+                    policy.episodic.max_episodes,
+                ));
+            }
+        }
+
+        let procedures_path = data_dir
+            .join("memory")
+            .join("procedures")
+            .join(format!("{hash}.json"));
+        if let Ok(content) = std::fs::read_to_string(&procedures_path) {
+            if let Ok(p) =
+                serde_json::from_str::<crate::core::procedural_memory::ProceduralStore>(&content)
+            {
+                checks.push((
+                    "procedures".to_string(),
+                    p.procedures.len(),
+                    policy.procedural.max_procedures,
+                ));
+            }
+        }
+
+        let mut warnings: Vec<String> = Vec::new();
+        let mut critical = false;
+
+        for (name, current, limit) in &checks {
+            if *limit == 0 {
+                continue;
+            }
+            let pct = (*current as f64 / *limit as f64 * 100.0) as u32;
+            if pct >= 95 {
+                critical = true;
+                warnings.push(format!("{name}: {current}/{limit} ({pct}%)"));
+            } else if pct >= 80 {
+                warnings.push(format!("{name}: {current}/{limit} ({pct}%)"));
+            }
+        }
+
+        if !warnings.is_empty() {
+            let color = if critical { RED } else { YELLOW };
+            let label = if critical { "CRIT" } else { "WARN" };
+            results.push(Outcome {
+                ok: !critical,
+                line: format!(
+                    "{BOLD}Capacity [{short_hash}]{RST} {color}{label}: {}{RST}",
+                    warnings.join(", ")
+                ),
+            });
+        }
+    }
+
+    // Global checks (not per project hash)
+
+    // Archive disk usage vs limit
+    let archive_limit_bytes = cfg.archive_max_disk_mb_effective() * 1_048_576;
+    if archive_limit_bytes > 0 {
+        let archive_used = crate::core::archive::disk_usage_bytes();
+        let pct = (archive_used as f64 / archive_limit_bytes as f64 * 100.0) as u32;
+        if pct >= 95 {
+            results.push(Outcome {
+                ok: false,
+                line: format!(
+                    "{BOLD}Capacity [archive]{RST} {RED}CRIT: disk {}/{}MB ({pct}%){RST}",
+                    archive_used / 1_048_576,
+                    archive_limit_bytes / 1_048_576
+                ),
+            });
+        } else if pct >= 80 {
+            results.push(Outcome {
+                ok: true,
+                line: format!(
+                    "{BOLD}Capacity [archive]{RST} {YELLOW}WARN: disk {}/{}MB ({pct}%){RST}",
+                    archive_used / 1_048_576,
+                    archive_limit_bytes / 1_048_576
+                ),
+            });
+        }
+    }
+
+    // Graph index file count vs limit
+    let graph_max_files = cfg.graph_index_max_files;
+    if graph_max_files > 0 {
+        if let Some(session) = crate::core::session::SessionState::load_latest() {
+            if let Some(ref project_root) = session.project_root {
+                let disk_status = crate::core::index_orchestrator::disk_status(project_root);
+                if let Some(graph_files) = disk_status.graph_index.file_count {
+                    let pct = (graph_files as f64 / graph_max_files as f64 * 100.0) as u32;
+                    if pct >= 95 {
+                        results.push(Outcome {
+                            ok: false,
+                            line: format!(
+                                "{BOLD}Capacity [graph]{RST} {RED}CRIT: files {graph_files}/{graph_max_files} ({pct}%){RST}"
+                            ),
+                        });
+                    } else if pct >= 80 {
+                        results.push(Outcome {
+                            ok: true,
+                            line: format!(
+                                "{BOLD}Capacity [graph]{RST} {YELLOW}WARN: files {graph_files}/{graph_max_files} ({pct}%){RST}"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        results.push(Outcome {
+            ok: true,
+            line: format!("{BOLD}Capacity{RST} {GREEN}all stores within limits{RST}"),
+        });
+    }
+
+    results
+}
+
+pub(super) fn lsp_server_outcomes() -> Vec<Outcome> {
+    use crate::lsp::config::{find_binary_in_path, KNOWN_SERVERS};
+
+    KNOWN_SERVERS
+        .iter()
+        .map(|info| {
+            let found = find_binary_in_path(info.binary);
+            match found {
+                Some(path) => Outcome {
+                    ok: true,
+                    line: format!(
+                        "{BOLD}{}{RST}  {GREEN}✓ {}{RST}  {DIM}{}{RST}",
+                        info.language,
+                        info.binary,
+                        path.display()
+                    ),
+                },
+                None => Outcome {
+                    ok: false,
+                    line: format!(
+                        "{BOLD}{}{RST}  {DIM}not installed{RST}  {YELLOW}{}{RST}",
+                        info.language, info.install_hint
+                    ),
+                },
+            }
+        })
+        .collect()
+}
