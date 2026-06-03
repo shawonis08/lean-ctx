@@ -54,7 +54,7 @@ path = "src/bin/seed_observatory.rs"
 required-features = ["dev-tools"]
 
 [features]
-default = ["tree-sitter", "embeddings", "http-server", "secure-update", "jemalloc"]
+default = ["tree-sitter", "embeddings", "http-server", "team-server", "secure-update", "jemalloc"]
 jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 dev-tools = []
 no-jail = []

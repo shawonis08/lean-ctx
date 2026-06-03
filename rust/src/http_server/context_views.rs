@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-#[cfg(feature = "team-server")]
 use axum::Extension;
 use axum::{extract::Query, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -8,18 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::core::context_os::redaction::{redact_event_payload, RedactionLevel};
 use crate::core::context_os::{ContextEventKindV1, ContextEventV1};
 
-#[cfg(feature = "team-server")]
 use super::team::TeamRequestContext;
 
 /// When running behind the team server, the workspace is bound to the
 /// authenticated token's header. The query parameter is ignored.
 /// In standalone mode (no TeamRequestContext), the query parameter is used.
-fn resolve_workspace(
-    query_ws: Option<String>,
-    #[cfg(feature = "team-server")] team_ctx: Option<&TeamRequestContext>,
-    #[cfg(not(feature = "team-server"))] _team_ctx: Option<&()>,
-) -> String {
-    #[cfg(feature = "team-server")]
+fn resolve_workspace(query_ws: Option<String>, team_ctx: Option<&TeamRequestContext>) -> String {
     if let Some(ctx) = team_ctx {
         return ctx.workspace_id.clone();
     }
@@ -87,13 +80,10 @@ pub struct SearchQuery {
 }
 
 pub async fn v1_events_search(
-    #[cfg(feature = "team-server")] team_ctx: Option<Extension<TeamRequestContext>>,
+    team_ctx: Option<Extension<TeamRequestContext>>,
     Query(q): Query<SearchQuery>,
 ) -> impl IntoResponse {
-    #[cfg(feature = "team-server")]
     let ws = resolve_workspace(q.workspace_id, team_ctx.as_ref().map(|e| &e.0));
-    #[cfg(not(feature = "team-server"))]
-    let ws = resolve_workspace(q.workspace_id, None);
     let limit = q.limit.unwrap_or(20).min(100);
 
     let rt = crate::core::context_os::runtime();
@@ -123,13 +113,10 @@ pub struct LineageQuery {
 }
 
 pub async fn v1_event_lineage(
-    #[cfg(feature = "team-server")] team_ctx: Option<Extension<TeamRequestContext>>,
+    team_ctx: Option<Extension<TeamRequestContext>>,
     Query(q): Query<LineageQuery>,
 ) -> impl IntoResponse {
-    #[cfg(feature = "team-server")]
     let ws = resolve_workspace(q.workspace_id.clone(), team_ctx.as_ref().map(|e| &e.0));
-    #[cfg(not(feature = "team-server"))]
-    let ws = resolve_workspace(q.workspace_id.clone(), None);
     let depth = q.depth.unwrap_or(20).min(50);
 
     let rt = crate::core::context_os::runtime();
@@ -149,13 +136,10 @@ pub async fn v1_event_lineage(
 }
 
 pub async fn v1_context_summary(
-    #[cfg(feature = "team-server")] team_ctx: Option<Extension<TeamRequestContext>>,
+    team_ctx: Option<Extension<TeamRequestContext>>,
     Query(q): Query<SummaryQuery>,
 ) -> impl IntoResponse {
-    #[cfg(feature = "team-server")]
     let ws = resolve_workspace(q.workspace_id, team_ctx.as_ref().map(|e| &e.0));
-    #[cfg(not(feature = "team-server"))]
-    let ws = resolve_workspace(q.workspace_id, None);
     let ch = q.channel_id.unwrap_or_else(|| "default".to_string());
     let limit = q.limit.unwrap_or(100).min(500);
 

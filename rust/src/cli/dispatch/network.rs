@@ -4,177 +4,41 @@ pub(super) fn cmd_team(rest: &[String]) {
     let sub = rest.first().map_or("help", std::string::String::as_str);
     match sub {
         "serve" => {
-            #[cfg(feature = "team-server")]
-            {
-                let cfg_path = rest
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, a)| {
-                        if let Some(v) = a.strip_prefix("--config=") {
-                            return Some(v.to_string());
-                        }
-                        if a == "--config" {
-                            return rest.get(i + 1).cloned();
-                        }
-                        None
-                    })
-                    .unwrap_or_default();
+            let cfg_path = rest
+                .iter()
+                .enumerate()
+                .find_map(|(i, a)| {
+                    if let Some(v) = a.strip_prefix("--config=") {
+                        return Some(v.to_string());
+                    }
+                    if a == "--config" {
+                        return rest.get(i + 1).cloned();
+                    }
+                    None
+                })
+                .unwrap_or_default();
 
-                if cfg_path.trim().is_empty() {
-                    eprintln!("Usage: lean-ctx team serve --config <path>");
-                    std::process::exit(1);
-                }
-
-                let cfg = crate::http_server::team::TeamServerConfig::load(std::path::Path::new(
-                    &cfg_path,
-                ))
-                .unwrap_or_else(|e| {
-                    eprintln!("Invalid team config: {e}");
-                    std::process::exit(1);
-                });
-
-                if let Err(e) = super::run_async(crate::http_server::team::serve_team(cfg)) {
-                    tracing::error!("Team server error: {e}");
-                    std::process::exit(1);
-                }
+            if cfg_path.trim().is_empty() {
+                eprintln!("Usage: lean-ctx team serve --config <path>");
+                std::process::exit(1);
             }
-            #[cfg(not(feature = "team-server"))]
-            {
-                eprintln!("lean-ctx team serve is not available in this build");
+
+            let cfg =
+                crate::http_server::team::TeamServerConfig::load(std::path::Path::new(&cfg_path))
+                    .unwrap_or_else(|e| {
+                        eprintln!("Invalid team config: {e}");
+                        std::process::exit(1);
+                    });
+
+            if let Err(e) = super::run_async(crate::http_server::team::serve_team(cfg)) {
+                tracing::error!("Team server error: {e}");
                 std::process::exit(1);
             }
         }
         "token" => {
             let action = rest.get(1).map_or("help", std::string::String::as_str);
             if action == "create" {
-                #[cfg(feature = "team-server")]
-                {
-                    let args = &rest[2..];
-                    let cfg_path = args
-                        .iter()
-                        .enumerate()
-                        .find_map(|(i, a)| {
-                            if let Some(v) = a.strip_prefix("--config=") {
-                                return Some(v.to_string());
-                            }
-                            if a == "--config" {
-                                return args.get(i + 1).cloned();
-                            }
-                            None
-                        })
-                        .unwrap_or_default();
-                    let token_id = args
-                        .iter()
-                        .enumerate()
-                        .find_map(|(i, a)| {
-                            if let Some(v) = a.strip_prefix("--id=") {
-                                return Some(v.to_string());
-                            }
-                            if a == "--id" {
-                                return args.get(i + 1).cloned();
-                            }
-                            None
-                        })
-                        .unwrap_or_default();
-                    let scopes_csv = args
-                        .iter()
-                        .enumerate()
-                        .find_map(|(i, a)| {
-                            if let Some(v) = a.strip_prefix("--scopes=") {
-                                return Some(v.to_string());
-                            }
-                            if let Some(v) = a.strip_prefix("--scope=") {
-                                return Some(v.to_string());
-                            }
-                            if a == "--scopes" || a == "--scope" {
-                                return args.get(i + 1).cloned();
-                            }
-                            None
-                        })
-                        .unwrap_or_default();
-
-                    if cfg_path.trim().is_empty()
-                        || token_id.trim().is_empty()
-                        || scopes_csv.trim().is_empty()
-                    {
-                        eprintln!(
-                            "Usage: lean-ctx team token create --config <path> --id <id> --scopes <csv>"
-                        );
-                        std::process::exit(1);
-                    }
-
-                    let cfg_p = std::path::PathBuf::from(&cfg_path);
-                    let mut cfg = crate::http_server::team::TeamServerConfig::load(cfg_p.as_path())
-                        .unwrap_or_else(|e| {
-                            eprintln!("Invalid team config: {e}");
-                            std::process::exit(1);
-                        });
-
-                    let mut scopes = Vec::new();
-                    for part in scopes_csv.split(',') {
-                        let p = part.trim().to_ascii_lowercase();
-                        if p.is_empty() {
-                            continue;
-                        }
-                        let scope = match p.as_str() {
-                            "search" => crate::http_server::team::TeamScope::Search,
-                            "graph" => crate::http_server::team::TeamScope::Graph,
-                            "artifacts" => crate::http_server::team::TeamScope::Artifacts,
-                            "index" => crate::http_server::team::TeamScope::Index,
-                            "events" => crate::http_server::team::TeamScope::Events,
-                            "sessionmutations" | "session_mutations" => {
-                                crate::http_server::team::TeamScope::SessionMutations
-                            }
-                            "knowledge" => crate::http_server::team::TeamScope::Knowledge,
-                            "audit" => crate::http_server::team::TeamScope::Audit,
-                            _ => {
-                                eprintln!("Unknown scope: {p}. Valid: search, graph, artifacts, index, events, sessionmutations, knowledge, audit");
-                                std::process::exit(1);
-                            }
-                        };
-                        if !scopes.contains(&scope) {
-                            scopes.push(scope);
-                        }
-                    }
-                    if scopes.is_empty() {
-                        eprintln!("At least 1 scope is required");
-                        std::process::exit(1);
-                    }
-
-                    let (token, hash) =
-                        crate::http_server::team::create_token().unwrap_or_else(|e| {
-                            eprintln!("Token generation failed: {e}");
-                            std::process::exit(1);
-                        });
-
-                    cfg.tokens.push(crate::http_server::team::TeamTokenConfig {
-                        id: token_id,
-                        sha256_hex: hash,
-                        scopes,
-                    });
-
-                    cfg.save(cfg_p.as_path()).unwrap_or_else(|e| {
-                        eprintln!("Failed to write config: {e}");
-                        std::process::exit(1);
-                    });
-
-                    println!("{token}");
-                    return;
-                }
-
-                #[cfg(not(feature = "team-server"))]
-                {
-                    eprintln!("lean-ctx team token is not available in this build");
-                    std::process::exit(1);
-                }
-            }
-            eprintln!("Usage: lean-ctx team token create --config <path> --id <id> --scopes <csv>");
-            std::process::exit(1);
-        }
-        "sync" => {
-            #[cfg(feature = "team-server")]
-            {
-                let args = &rest[1..];
+                let args = &rest[2..];
                 let cfg_path = args
                     .iter()
                     .enumerate()
@@ -188,69 +52,177 @@ pub(super) fn cmd_team(rest: &[String]) {
                         None
                     })
                     .unwrap_or_default();
-                if cfg_path.trim().is_empty() {
-                    eprintln!("Usage: lean-ctx team sync --config <path> [--workspace <id>]");
+                let token_id = args
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, a)| {
+                        if let Some(v) = a.strip_prefix("--id=") {
+                            return Some(v.to_string());
+                        }
+                        if a == "--id" {
+                            return args.get(i + 1).cloned();
+                        }
+                        None
+                    })
+                    .unwrap_or_default();
+                let scopes_csv = args
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, a)| {
+                        if let Some(v) = a.strip_prefix("--scopes=") {
+                            return Some(v.to_string());
+                        }
+                        if let Some(v) = a.strip_prefix("--scope=") {
+                            return Some(v.to_string());
+                        }
+                        if a == "--scopes" || a == "--scope" {
+                            return args.get(i + 1).cloned();
+                        }
+                        None
+                    })
+                    .unwrap_or_default();
+
+                if cfg_path.trim().is_empty()
+                    || token_id.trim().is_empty()
+                    || scopes_csv.trim().is_empty()
+                {
+                    eprintln!(
+                        "Usage: lean-ctx team token create --config <path> --id <id> --scopes <csv>"
+                    );
                     std::process::exit(1);
                 }
-                let only_ws = args.iter().enumerate().find_map(|(i, a)| {
-                    if let Some(v) = a.strip_prefix("--workspace=") {
+
+                let cfg_p = std::path::PathBuf::from(&cfg_path);
+                let mut cfg = crate::http_server::team::TeamServerConfig::load(cfg_p.as_path())
+                    .unwrap_or_else(|e| {
+                        eprintln!("Invalid team config: {e}");
+                        std::process::exit(1);
+                    });
+
+                let mut scopes = Vec::new();
+                for part in scopes_csv.split(',') {
+                    let p = part.trim().to_ascii_lowercase();
+                    if p.is_empty() {
+                        continue;
+                    }
+                    let scope = match p.as_str() {
+                        "search" => crate::http_server::team::TeamScope::Search,
+                        "graph" => crate::http_server::team::TeamScope::Graph,
+                        "artifacts" => crate::http_server::team::TeamScope::Artifacts,
+                        "index" => crate::http_server::team::TeamScope::Index,
+                        "events" => crate::http_server::team::TeamScope::Events,
+                        "sessionmutations" | "session_mutations" => {
+                            crate::http_server::team::TeamScope::SessionMutations
+                        }
+                        "knowledge" => crate::http_server::team::TeamScope::Knowledge,
+                        "audit" => crate::http_server::team::TeamScope::Audit,
+                        _ => {
+                            eprintln!("Unknown scope: {p}. Valid: search, graph, artifacts, index, events, sessionmutations, knowledge, audit");
+                            std::process::exit(1);
+                        }
+                    };
+                    if !scopes.contains(&scope) {
+                        scopes.push(scope);
+                    }
+                }
+                if scopes.is_empty() {
+                    eprintln!("At least 1 scope is required");
+                    std::process::exit(1);
+                }
+
+                let (token, hash) = crate::http_server::team::create_token().unwrap_or_else(|e| {
+                    eprintln!("Token generation failed: {e}");
+                    std::process::exit(1);
+                });
+
+                cfg.tokens.push(crate::http_server::team::TeamTokenConfig {
+                    id: token_id,
+                    sha256_hex: hash,
+                    scopes,
+                });
+
+                cfg.save(cfg_p.as_path()).unwrap_or_else(|e| {
+                    eprintln!("Failed to write config: {e}");
+                    std::process::exit(1);
+                });
+
+                println!("{token}");
+                return;
+            }
+            eprintln!("Usage: lean-ctx team token create --config <path> --id <id> --scopes <csv>");
+            std::process::exit(1);
+        }
+        "sync" => {
+            let args = &rest[1..];
+            let cfg_path = args
+                .iter()
+                .enumerate()
+                .find_map(|(i, a)| {
+                    if let Some(v) = a.strip_prefix("--config=") {
                         return Some(v.to_string());
                     }
-                    if let Some(v) = a.strip_prefix("--workspace-id=") {
-                        return Some(v.to_string());
-                    }
-                    if a == "--workspace" || a == "--workspace-id" {
+                    if a == "--config" {
                         return args.get(i + 1).cloned();
                     }
                     None
-                });
+                })
+                .unwrap_or_default();
+            if cfg_path.trim().is_empty() {
+                eprintln!("Usage: lean-ctx team sync --config <path> [--workspace <id>]");
+                std::process::exit(1);
+            }
+            let only_ws = args.iter().enumerate().find_map(|(i, a)| {
+                if let Some(v) = a.strip_prefix("--workspace=") {
+                    return Some(v.to_string());
+                }
+                if let Some(v) = a.strip_prefix("--workspace-id=") {
+                    return Some(v.to_string());
+                }
+                if a == "--workspace" || a == "--workspace-id" {
+                    return args.get(i + 1).cloned();
+                }
+                None
+            });
 
-                let cfg = crate::http_server::team::TeamServerConfig::load(std::path::Path::new(
-                    &cfg_path,
-                ))
-                .unwrap_or_else(|e| {
-                    eprintln!("Invalid team config: {e}");
-                    std::process::exit(1);
-                });
+            let cfg =
+                crate::http_server::team::TeamServerConfig::load(std::path::Path::new(&cfg_path))
+                    .unwrap_or_else(|e| {
+                        eprintln!("Invalid team config: {e}");
+                        std::process::exit(1);
+                    });
 
-                for ws in &cfg.workspaces {
-                    if let Some(ref only) = only_ws {
-                        if ws.id != *only {
-                            continue;
-                        }
-                    }
-                    let git_dir = ws.root.join(".git");
-                    if !git_dir.exists() {
-                        eprintln!(
-                            "workspace '{}' root is not a git repo: {}",
-                            ws.id,
-                            ws.root.display()
-                        );
-                        std::process::exit(1);
-                    }
-                    let status = std::process::Command::new("git")
-                        .arg("-C")
-                        .arg(&ws.root)
-                        .args(["fetch", "--all", "--prune"])
-                        .status()
-                        .unwrap_or_else(|e| {
-                            eprintln!("git fetch failed for workspace '{}': {e}", ws.id);
-                            std::process::exit(1);
-                        });
-                    if !status.success() {
-                        eprintln!(
-                            "git fetch failed for workspace '{}' (exit={})",
-                            ws.id,
-                            status.code().unwrap_or(1)
-                        );
-                        std::process::exit(1);
+            for ws in &cfg.workspaces {
+                if let Some(ref only) = only_ws {
+                    if ws.id != *only {
+                        continue;
                     }
                 }
-            }
-            #[cfg(not(feature = "team-server"))]
-            {
-                eprintln!("lean-ctx team sync is not available in this build");
-                std::process::exit(1);
+                let git_dir = ws.root.join(".git");
+                if !git_dir.exists() {
+                    eprintln!(
+                        "workspace '{}' root is not a git repo: {}",
+                        ws.id,
+                        ws.root.display()
+                    );
+                    std::process::exit(1);
+                }
+                let status = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&ws.root)
+                    .args(["fetch", "--all", "--prune"])
+                    .status()
+                    .unwrap_or_else(|e| {
+                        eprintln!("git fetch failed for workspace '{}': {e}", ws.id);
+                        std::process::exit(1);
+                    });
+                if !status.success() {
+                    eprintln!(
+                        "git fetch failed for workspace '{}' (exit={})",
+                        ws.id,
+                        status.code().unwrap_or(1)
+                    );
+                    std::process::exit(1);
+                }
             }
         }
         _ => {
