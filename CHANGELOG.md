@@ -3,12 +3,7 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
-
-### Added
-- **OpenAI Responses API support in the proxy** (#346, thanks [@Lctrs](https://github.com/Lctrs)): clients that moved to OpenAI's new Responses API (`POST /v1/responses`) — opencode, the OpenAI Agents SDK — were forwarded untouched because the proxy only understood Chat Completions (`messages`). The proxy now compresses the Responses-API shape too: each `function_call_output.output` (the Responses analogue of a role:`"tool"` message — a string, or an `input_text` content array) is run through the same pattern pipeline as every other tool result. The conversation `input` array is intentionally left structurally intact (no history pruning) so a `function_call` can never be separated from its matching `function_call_output` and trigger a 400. Retrieve/cancel/delete sub-paths (`/v1/responses/{id}/…`) pass through cleanly, and `/status` introspection now reports an accurate token breakdown for Responses requests (`instructions` → system prompt; `input` items → user/assistant/tool buckets; `input_image` counted). Chat Completions remains fully supported.
-
-## [3.7.2] — 2026-06-04
+## [3.7.3] — 2026-06-04
 
 > **Compression where the agent actually is — and fidelity where it matters.** A
 > `shell` MCP tool so the Codex Desktop/Cloud app compresses even without
@@ -16,9 +11,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 > one command no longer means wiping out the defaults. Navigation output (`map`/
 > `signatures`) now carries line ranges so agents jump straight to a symbol, and
 > already-compact formats (TOON) pass through untouched instead of being
-> recompressed away.
+> recompressed away. The proxy also speaks OpenAI's new Responses API.
+>
+> _Supersedes 3.7.2: an automated release misfire published an incomplete 3.7.2 to
+> crates.io / npm before this work had landed, and those registries permanently
+> reject re-publishing a version — so 3.7.3 is the first clean release of this work
+> across every channel (crates.io, npm, GitHub, Homebrew)._
 
 ### Added
+- **OpenAI Responses API support in the proxy** (#346, thanks [@Lctrs](https://github.com/Lctrs)): clients that moved to OpenAI's new Responses API (`POST /v1/responses`) — opencode, the OpenAI Agents SDK — were forwarded untouched because the proxy only understood Chat Completions (`messages`). The proxy now compresses the Responses-API shape too: each `function_call_output.output` (the Responses analogue of a role:`"tool"` message — a string, or an `input_text` content array) is run through the same pattern pipeline as every other tool result. The conversation `input` array is intentionally left structurally intact (no history pruning) so a `function_call` can never be separated from its matching `function_call_output` and trigger a 400. Retrieve/cancel/delete sub-paths (`/v1/responses/{id}/…`) pass through cleanly, and `/status` introspection now reports an accurate token breakdown for Responses requests (`instructions` → system prompt; `input` items → user/assistant/tool buckets; `input_image` counted). Chat Completions remains fully supported.
 - **`shell` MCP tool** (#337): the instruction-only fix in 3.7.1 wasn't enough — the Codex Desktop / Cloud app loads the MCP server but its agent ignores `ctx_shell` and reaches for a native `shell`/`Bash` tool, so nothing compressed. lean-ctx now exposes a `shell` tool (familiar name + model-optimized description) that transparently delegates to the same 95+-pattern compression pipeline as `ctx_shell`, giving the Desktop/Cloud app the compression the CLI gets via hooks. Registered for all MCP clients.
 - **`lean-ctx allow <cmd>`** (#341): permit a binary on the shell allowlist *additively* through the new `shell_allowlist_extra` config field — so allowing e.g. `acli` keeps `git`/`cargo`/`npm`/… intact instead of replacing the whole built-in list. `lean-ctx allow --list` prints the effective allowlist plus the exact config path in use; `--remove` reverts. Picked up on the next command — no MCP/daemon restart needed.
 - **Line ranges in `map` / `signatures` output** (#340, thanks [@iohansson](https://github.com/iohansson)): every entity in the navigation-focused `map` and `signatures` views now carries a compact `@Lstart[-end]` suffix (e.g. `fn ⊛ build() → Config @L42-58`), so an agent can jump straight to a symbol instead of issuing a follow-up search. Spans are populated consistently across the tree-sitter extractors (all languages, not just Kotlin) and the regex fallbacks (TS/JS, Rust, Python, Go, generic), with Vue/Svelte SFC spans shifted back to file-absolute lines. **Mode-aware by design:** the suffix is emitted *only* in `map`/`signatures` (MCP + CLI) where locating code is the point — compression-first paths (`aggressive`, `entropy`, full-body reads, and `ctx_compress`/`ctx_outline`/`ctx_fill`/`ctx_analyze`/repo-graph) stay byte-identical and pay zero extra tokens. The `map`/`signatures` compression caches are version-bumped so stale range-less entries are never served.
@@ -27,6 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **VS Code / Cursor extension, now publishable** (community feedback): the editor extension is consolidated into a single, marketplace-ready package (`vscode-extension`) and shipped to the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=LeanCTX.lean-ctx) and [Open VSX](https://open-vsx.org/extension/LeanCTX/lean-ctx) (Cursor, VSCodium, Windsurf) via a dedicated, tag-triggered CI workflow (`publish-vscode.yml`). It gains binary auto-detection (PATH / `~/.cargo/bin` / Homebrew, for GUI editors with a stripped PATH), `setup` / `doctor` / `gain` / `heatmap` / web-dashboard commands, one-click workspace MCP wiring, plus an Apache-2.0 license and PNG icon. The duplicate scaffold (`packages/vscode-lean-ctx`) was removed.
 
 ### Fixed
+- **MCP stdio stays protocol-clean** (#348): confirmed and regression-guarded that lean-ctx routes all `tracing` diagnostics to **stderr** — never the stdout JSON-RPC transport — so a log line can never be interleaved into an MCP client's message stream and break parsing. This has held since ≤3.7.1 (the transport writes only framed JSON-RPC, the auto-started proxy runs as a subprocess with stdout redirected to `null`, and tool handlers return strings rather than printing); a source-level guard now fails the build if the logging writer is ever switched to stdout.
 - **`shell_allowlist` edits silently ignored in MCP/editor mode** (#341): allowlist changes looked like no-ops while `lean-ctx -c` (CLI, warn-only) still ran the command, due to three compounding traps. (1) A malformed `config.toml` fell back to the defaults with the warning printed only to **stderr** — invisible over an MCP/stdio transport; the parse error is now surfaced in the block message and in `lean-ctx doctor`. (2) Setting `shell_allowlist` directly replaced the entire default list — the new additive `shell_allowlist_extra` (written by `lean-ctx allow`) avoids that footgun. (3) The "not in allowlist" message now names the **exact config path the runtime reads** plus the precise additive fix, so a config-path/HOME mismatch between the editor's MCP process and your shell is immediately visible. `lean-ctx doctor` gains a "Shell allowlist" check (effective command count + parse status).
 
 ## [3.7.1] — 2026-06-03
